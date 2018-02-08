@@ -20,8 +20,8 @@ State     == [playlist : Playlist, playhead : Playhead]
 InitState == [playlist |-> <<>>, playhead |-> Stopped]
 
 Message  == [action : {"sync"}, data : State] \cup
-            [action : {"add"}, data : Song] \cup
-            [action : {"seek", "skip"}, data: Playhead] 
+            [action : {"add"}, data : Song, sender : Client] \cup
+            [action : {"seek", "skip"}, data: Playhead, sender : Client]
 
 TypeOK   == /\ inbox \in [Node -> Seq(Message)]
             /\ state \in [Node -> State]
@@ -34,23 +34,23 @@ TypeOK   == /\ inbox \in [Node -> Seq(Message)]
 SyncMsg ==
   [action |-> "sync", data |-> state'[Server]]
 
-AddMsg(song) ==
-  [action |-> "add", data |-> song]
+AddMsg(client, song) ==
+  [action |-> "add", data |-> song, sender |-> client]
 
-SeekMsg(playhead) ==
-  [action |-> "seek", data |-> [playhead EXCEPT !.t = playhead.t + 1]]
+SeekMsg(client, playhead) ==
+  [action |-> "seek", data |-> playhead, sender |-> client]
 
-SkipMsg(playhead) ==
-  [action |-> "skip", data |-> playhead]
+SkipMsg(client, playhead) ==
+  [action |-> "skip", data |-> playhead, sender |-> client]
 
 -----------------------------------------------------------------------------
 (***************************************************************************)
 (* Client Actions                                                          *)
 (***************************************************************************)
 
-SendAdd(song) ==
+SendAdd(self, song) ==
   LET
-    msg == AddMsg(song)
+    msg == AddMsg(self, song)
   IN
     /\ inbox' = [inbox EXCEPT ![Server] = Append(inbox[Server], msg)]
     /\ UNCHANGED state
@@ -67,7 +67,7 @@ RecvSync(self) ==
 SendSeek(self) ==
   LET
     playhead == state[self].playhead
-    msg == SeekMsg(playhead)
+    msg == SeekMsg(self, [playhead EXCEPT !.t = playhead.t + 1])
   IN
     /\ playhead.i # -1
     /\ inbox' = [inbox EXCEPT ![Server] = Append(inbox[Server], msg)]
@@ -76,7 +76,7 @@ SendSeek(self) ==
 SendSkip(self) ==
   LET
     playhead == state[self].playhead
-    msg == SkipMsg(playhead)
+    msg == SkipMsg(self, playhead)
   IN
     /\ playhead.i # -1
     /\ inbox' = [inbox EXCEPT ![Server] = Append(inbox[Server], msg)]
@@ -110,28 +110,31 @@ RecvAdd ==
 
 RecvSeek ==
   /\ inbox[Server] # <<>>
-  /\ Head(inbox[Server]).action = "seek"
   /\ LET
-       data     == Head(inbox[Server]).data
-       playhead == state[Server].playhead
+       server == state[Server]
+       msg == Head(inbox[Server])
      IN
-       /\ state' = [state EXCEPT ![Server].playhead.t = data.t]
+       /\ msg.action = "seek"
+       /\ msg.data.i = server.playhead.i      
+       /\ state' = [state EXCEPT ![Server].playhead.t = msg.data.t]
        /\ BroadcastSync
 
 RecvSkip ==
   /\ inbox[Server] # <<>>
-  /\ Head(inbox[Server]).action = "skip"
   /\ LET
-       data        == Head(inbox[Server]).data
-       playlist    == state[Server].playlist
-       playhead    == state[Server].playhead
-       newIndex    == playhead.i + 1
-       newPlayhead == IF newIndex < Len(playlist)
-                         THEN [i |-> newIndex, t |-> 0]
-                         ELSE Stopped
+       server == state[Server]
+       msg == Head(inbox[Server])
      IN
-       /\ state' = [state EXCEPT ![Server].playhead = newPlayhead]
-       /\ BroadcastSync
+       /\ msg.action = "skip"
+       /\ msg.data.i = server.playhead.i
+       /\ LET
+            newIndex == server.playhead.i + 1
+            newPlayhead == IF newIndex < Len(server.playlist)
+                              THEN [i |-> newIndex, t |-> 0]
+                              ELSE Stopped
+          IN
+            /\ state' = [state EXCEPT ![Server].playhead = newPlayhead]
+            /\ BroadcastSync
 
 -----------------------------------------------------------------------------
 (***************************************************************************)
@@ -143,7 +146,7 @@ Init ==
   /\ state = [n \in Node |-> InitState]
 
 Next ==
-  \/ \E song \in Song : SendAdd(song)
+  \/ \E self \in Client, song \in Song : SendAdd(self, song)
   \/ \E self \in Client : RecvSync(self)
   \/ \E self \in Client : SendSeek(self)
   \/ \E self \in Client : SendSkip(self)
@@ -159,6 +162,20 @@ Spec ==
 (* Invariants                                                              *)
 (***************************************************************************)
 
+PlayheadOK ==
+  LET
+    server == state[Server].playhead
+  IN
+    \/ server = Stopped
+    \/ \A c \in Client :
+        LET
+          client == state[c].playhead
+        IN
+          \/ client.i < server.i
+          \/ /\ client.i = server.i
+             /\ client.t =< server.t
+
 THEOREM Spec => []TypeOK
+THEOREM Spec => []PlayheadOK
 
 =============================================================================
