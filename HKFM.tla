@@ -94,19 +94,20 @@ BroadcastSync ==
 
 RecvAdd ==
   /\ inbox[Server] # <<>>
-  /\ Head(inbox[Server]).action = "add"
   /\ LET
-       song        == Head(inbox[Server]).data
-       playlist    == state[Server].playlist
-       playhead    == state[Server].playhead
-       newPlaylist == Append(playlist, song)
-       newPlayhead == IF playhead.i = -1
-                         THEN [i |-> Len(playlist), t |-> 0]
-                         ELSE playhead
+       server == state[Server]
+       msg == Head(inbox[Server])
      IN
-       /\ state' = [state EXCEPT ![Server] = [playlist |-> newPlaylist,
-                                              playhead |-> newPlayhead]]
-       /\ BroadcastSync
+       /\ msg.action = "add"
+       /\ LET
+            newPlaylist == Append(server.playlist, msg.data)
+            newPlayhead == IF server.playhead.i = -1
+                              THEN [i |-> Len(server.playlist), t |-> 0]
+                              ELSE server.playhead
+          IN
+            /\ state' = [state EXCEPT ![Server] = [playlist |-> newPlaylist,
+                                                   playhead |-> newPlayhead]]
+            /\ BroadcastSync
 
 RecvSeek ==
   /\ inbox[Server] # <<>>
@@ -115,7 +116,8 @@ RecvSeek ==
        msg == Head(inbox[Server])
      IN
        /\ msg.action = "seek"
-       /\ msg.data.i = server.playhead.i      
+       /\ msg.data.i = server.playhead.i
+       /\ msg.data.t > server.playhead.t
        /\ state' = [state EXCEPT ![Server].playhead.t = msg.data.t]
        /\ BroadcastSync
 
@@ -138,6 +140,20 @@ RecvSkip ==
 
 -----------------------------------------------------------------------------
 (***************************************************************************)
+(* Randomly lose a message from an inbox                                   *)
+(***************************************************************************)
+
+Remove(i, seq) ==
+  [j \in 1..(Len(seq) - 1) |-> IF j < i THEN seq[j] ELSE seq[j + 1]] 
+
+LoseMsg ==
+  \E n \in DOMAIN inbox :
+    \E i \in DOMAIN inbox[n] :
+      /\ inbox' = [inbox EXCEPT ![n] = Remove(i, inbox[n])]
+      /\ UNCHANGED state
+
+-----------------------------------------------------------------------------
+(***************************************************************************)
 (* Spec                                                                    *)
 (***************************************************************************)
 
@@ -153,6 +169,7 @@ Next ==
   \/ RecvAdd
   \/ RecvSeek
   \/ RecvSkip
+  \/ LoseMsg
 
 Spec ==
   Init /\ [][Next]_vars
@@ -175,7 +192,18 @@ PlayheadOK ==
           \/ /\ client.i = server.i
              /\ client.t =< server.t
 
+SeekAdvances ==
+  \/ state[Server].playhead.i /= state'[Server].playhead.i
+  \/ state[Server].playhead.t =< state'[Server].playhead.t
+
+Synced ==
+  \A c \in Client : state[c] = state[Server]
+
+-----------------------------------------------------------------------------
+
 THEOREM Spec => []TypeOK
 THEOREM Spec => []PlayheadOK
+THEOREM Spec => []<>Synced
+THEOREM Spec => [][SeekAdvances]_vars
 
 =============================================================================
