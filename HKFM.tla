@@ -56,7 +56,7 @@ SendAdd(self, song) ==
     /\ UNCHANGED state
 
 RecvSync(self) ==
-  /\ inbox[self] # <<>>
+  /\ inbox[self] /= <<>>
   /\ Head(inbox[self]).action = "sync"
   /\ LET
        newState == Head(inbox[self]).data
@@ -69,7 +69,7 @@ SendSeek(self) ==
     playhead == state[self].playhead
     msg == SeekMsg(self, [playhead EXCEPT !.t = playhead.t + 1])
   IN
-    /\ playhead.i # -1
+    /\ playhead /= Stopped
     /\ inbox' = [inbox EXCEPT ![Server] = Append(inbox[Server], msg)]
     /\ UNCHANGED state
 
@@ -78,7 +78,7 @@ SendSkip(self) ==
     playhead == state[self].playhead
     msg == SkipMsg(self, playhead)
   IN
-    /\ playhead.i # -1
+    /\ playhead /= Stopped
     /\ inbox' = [inbox EXCEPT ![Server] = Append(inbox[Server], msg)]
     /\ UNCHANGED state
 
@@ -93,7 +93,7 @@ BroadcastSync ==
                                  ELSE Append(inbox[n], SyncMsg)] 
 
 RecvAdd ==
-  /\ inbox[Server] # <<>>
+  /\ inbox[Server] /= <<>>
   /\ LET
        server == state[Server]
        msg == Head(inbox[Server])
@@ -101,7 +101,7 @@ RecvAdd ==
        /\ msg.action = "add"
        /\ LET
             newPlaylist == Append(server.playlist, msg.data)
-            newPlayhead == IF server.playhead.i = -1
+            newPlayhead == IF server.playhead = Stopped
                               THEN [i |-> Len(server.playlist), t |-> 0]
                               ELSE server.playhead
           IN
@@ -110,7 +110,7 @@ RecvAdd ==
             /\ BroadcastSync
 
 RecvSeek ==
-  /\ inbox[Server] # <<>>
+  /\ inbox[Server] /= <<>>
   /\ LET
        server == state[Server]
        msg == Head(inbox[Server])
@@ -122,7 +122,7 @@ RecvSeek ==
        /\ BroadcastSync
 
 RecvSkip ==
-  /\ inbox[Server] # <<>>
+  /\ inbox[Server] /= <<>>
   /\ LET
        server == state[Server]
        msg == Head(inbox[Server])
