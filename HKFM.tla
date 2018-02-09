@@ -28,7 +28,7 @@ Server == CHOOSE x : x \notin Client
 Node   == Client \cup {Server}
 
 (***************************************************************************)
-(* These terms all relate to the playhead. A playlist has two fields:      *)
+(* These terms all relate to the playhead. A playhead has two fields:      *)
 (*                                                                         *)
 (* i: the current track in the playlist                                    *)
 (* t: the number of seconds into that track                                *)
