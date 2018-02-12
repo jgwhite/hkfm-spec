@@ -28,23 +28,29 @@ Server == CHOOSE x : x \notin Client
 Node   == Client \cup {Server}
 
 (***************************************************************************)
-(* These terms all relate to the playhead. A playhead has two fields:      *)
+(* These terms relate to the playhead. A playhead has two fields:          *)
 (*                                                                         *)
 (* i: the current track in the playlist                                    *)
 (* t: the number of seconds into that track                                *)
 (*                                                                         *)
 (* When i = -1 it means we're not playing anything.                        *)
-(*                                                                         *)
-(* Every node has a State consisting of two fields:                        *)
-(*                                                                         *)
-(* playlist: a sequence of songs from the constant set Song                *)
-(* playhead: as described above                                            *)
 (***************************************************************************)
 
-Idx       == Nat \cup {-1}
-Playlist  == Seq(Song)
-Playhead  == [i : Idx, t : Nat]
-Stopped   == [i |-> -1, t |-> 0]
+Idx      == Nat \cup {-1}
+Playhead == [i : Idx, t : Nat]
+Stopped  == [i |-> -1, t |-> 0]
+
+(***************************************************************************)
+(* A playlist is a sequence of songs from the constant set Song.          *)
+(* More formally, Playlist is the set of all sequences of songs.           *)
+(***************************************************************************)
+
+Playlist == Seq(Song)
+
+(***************************************************************************)
+(* Every node has a State containing their current playlist and playhead.  *)
+(***************************************************************************)
+
 State     == [playlist : Playlist, playhead : Playhead]
 InitState == [playlist |-> <<>>, playhead |-> Stopped]
 
@@ -61,11 +67,11 @@ Message == [action : {"sync"}, data : State] \cup
 
 (***************************************************************************)
 (* The TypeOK formula states that inbox must be a function from nodes to   *)   
-(* sequences of messages and state must be a function from nodes           *)
-(* to states. We can ask TLC to check that TypeOK is an invariant of       *)
-(* every behaviour, meaning it will find circumstances where inbox and     *)
-(* state end up looking wonky. It's also useful to have as a high level    *)
-(* type definition for these variables.                                    *)
+(* sequences of messages and `state' must be a function from nodes         *)
+(* to states. We can ask TLC to check that TypeOK is an invariant,         *)
+(* meaning it will find circumstances where inbox and state end up         *)
+(* looking wonky. It's also useful to have as a high level type            *)
+(* declaration for these variables.                                        *)
 (***************************************************************************)
 
 TypeOK == /\ inbox \in [Node -> Seq(Message)]
@@ -73,35 +79,54 @@ TypeOK == /\ inbox \in [Node -> Seq(Message)]
 
 -----------------------------------------------------------------------------
 (***************************************************************************)
-(* Message Constructors                                                    *)
-(*                                                                         *)
-(* These operators are just for convenience when creating messages in      *)
-(* actions below.                                                          *)
-(***************************************************************************)
-
-SyncMsg ==
-  [action |-> "sync", data |-> state'[Server]]
-
-AddMsg(client, song) ==
-  [action |-> "add", data |-> song, sender |-> client]
-
-SeekMsg(client, playhead) ==
-  [action |-> "seek", data |-> playhead, sender |-> client]
-
-SkipMsg(client, playhead) ==
-  [action |-> "skip", data |-> playhead, sender |-> client]
-
------------------------------------------------------------------------------
-(***************************************************************************)
 (* Client Actions                                                          *)
+(***************************************************************************)
+
+(***************************************************************************)
+(* A client sends the `"add"' message to the server with the name of the   *)
+(* desired song in the `data' field.                                       *)
 (***************************************************************************)
 
 SendAdd(self, song) ==
   LET
-    msg == AddMsg(self, song)
+    msg == [action |-> "add", data |-> song, sender |-> self]
   IN
     /\ inbox' = [inbox EXCEPT ![Server] = Append(inbox[Server], msg)]
     /\ UNCHANGED state
+
+(***************************************************************************)
+(* A client sends the `"seek"' message to the server with the intended     *)
+(* new state of the playhead in the `data' field.                          *)
+(***************************************************************************)
+
+SendSeek(self) ==
+  LET
+    playhead == state[self].playhead
+    newPlayhead == [playhead EXCEPT !.t = playhead.t + 1]
+    msg == [action |-> "seek", data |-> newPlayhead, sender |-> self]
+  IN
+    /\ playhead /= Stopped
+    /\ inbox' = [inbox EXCEPT ![Server] = Append(inbox[Server], msg)]
+    /\ UNCHANGED state
+
+(***************************************************************************)
+(* A client send the `"skip"' message to the server with their current     *)
+(* playhead state in the `data' field.                                     *)
+(***************************************************************************)
+
+SendSkip(self) ==
+  LET
+    playhead == state[self].playhead
+    msg == [action |-> "skip", data |-> playhead, sender |-> self]
+  IN
+    /\ playhead /= Stopped
+    /\ inbox' = [inbox EXCEPT ![Server] = Append(inbox[Server], msg)]
+    /\ UNCHANGED state
+
+(***************************************************************************)
+(* A client receives the `"sync"' message from the server and updates      *)
+(* their own state to match the contents of the `data' field.              *)
+(***************************************************************************)
 
 RecvSync(self) ==
   /\ inbox[self] /= <<>>
@@ -113,33 +138,33 @@ RecvSync(self) ==
        /\ inbox' = [inbox EXCEPT ![self] = tail]
        /\ state' = [state EXCEPT ![self] = msg.data]
 
-SendSeek(self) ==
-  LET
-    playhead == state[self].playhead
-    msg == SeekMsg(self, [playhead EXCEPT !.t = playhead.t + 1])
-  IN
-    /\ playhead /= Stopped
-    /\ inbox' = [inbox EXCEPT ![Server] = Append(inbox[Server], msg)]
-    /\ UNCHANGED state
-
-SendSkip(self) ==
-  LET
-    playhead == state[self].playhead
-    msg == SkipMsg(self, playhead)
-  IN
-    /\ playhead /= Stopped
-    /\ inbox' = [inbox EXCEPT ![Server] = Append(inbox[Server], msg)]
-    /\ UNCHANGED state
-
 -----------------------------------------------------------------------------
 (***************************************************************************)
 (* Server Actions                                                          *)
 (***************************************************************************)
 
-BroadcastSync ==
-  /\ inbox' = [n \in Node |-> IF n = Server
-                                 THEN Tail(inbox[n])
-                                 ELSE Append(inbox[n], SyncMsg)] 
+(***************************************************************************)
+(* This is a helper operation. All the server's actions consume the first  *)
+(* message in the server's inbox and then broadcast the new state to all   *)
+(* clients. That is, it places a `"sync"' message in the inbox of all      *)
+(* clients.                                                                *)
+(***************************************************************************)
+
+ConsumeMsgAndBroadcastSync ==
+  LET
+    msg == [action |-> "sync", data |-> state'[Server]]
+  IN
+    inbox' = [n \in Node |-> IF n = Server
+                                THEN Tail(inbox[n])
+                                ELSE Append(inbox[n], msg)] 
+
+(***************************************************************************)
+(* The server receives an `"add"' message, appends the requested track     *)
+(* to the playlist, then performs ConsumeMsgAndBroadcastSync.              *)
+(*                                                                         *)
+(* If the playhead is currently Stopped, the server starts playing the     *)
+(* newly-added song.                                                       *)
+(***************************************************************************)
 
 RecvAdd ==
   /\ inbox[Server] /= <<>>
@@ -153,10 +178,15 @@ RecvAdd ==
             newPlayhead == IF server.playhead = Stopped
                               THEN [i |-> Len(server.playlist), t |-> 0]
                               ELSE server.playhead
+            newState == [playlist |-> newPlaylist, playhead |-> newPlayhead]
           IN
-            /\ state' = [state EXCEPT ![Server] = [playlist |-> newPlaylist,
-                                                   playhead |-> newPlayhead]]
-            /\ BroadcastSync
+            /\ state' = [state EXCEPT ![Server] = newState]
+            /\ ConsumeMsgAndBroadcastSync
+
+(***************************************************************************)
+(* The server receives a `"seek"' message, updates `playhead.t' to the     *)
+(* specified value, then performs ConsumeMsgAndBroadcastSync.              *)
+(***************************************************************************)
 
 RecvSeek ==
   /\ inbox[Server] /= <<>>
@@ -166,7 +196,15 @@ RecvSeek ==
      IN
        /\ msg.action = "seek"
        /\ state' = [state EXCEPT ![Server].playhead.t = msg.data.t]
-       /\ BroadcastSync
+       /\ ConsumeMsgAndBroadcastSync
+
+(***************************************************************************)
+(* The server receives a `"skip"' message, increments `playhead.i', sets   *)
+(* `playhead.t' to 0, then performs ConsumeMsgAndBroadcastSync.            *)
+(*                                                                         *)
+(* If `playhead.i' has gone beyond the bounds of the playlist, the server  *)
+(* sets the playhead to Stopped.                                           *)
+(***************************************************************************)
 
 RecvSkip ==
   /\ inbox[Server] /= <<>>
@@ -182,7 +220,7 @@ RecvSkip ==
                               ELSE Stopped
           IN
             /\ state' = [state EXCEPT ![Server].playhead = newPlayhead]
-            /\ BroadcastSync
+            /\ ConsumeMsgAndBroadcastSync
 
 -----------------------------------------------------------------------------
 (***************************************************************************)
@@ -190,7 +228,7 @@ RecvSkip ==
 (***************************************************************************)
 
 Remove(i, seq) ==
-  [j \in 1..(Len(seq) - 1) |-> IF j < i THEN seq[j] ELSE seq[j + 1]] 
+  [j \in 1..(Len(seq) - 1) |-> IF j < i THEN seq[j] ELSE seq[j + 1]]
 
 LoseMsg ==
   \E n \in DOMAIN inbox :
@@ -200,27 +238,53 @@ LoseMsg ==
 
 -----------------------------------------------------------------------------
 (***************************************************************************)
-(* Spec                                                                    *)
+(* The Spec                                                                *)
+(***************************************************************************)
+
+(***************************************************************************)
+(* `Init' must be true for the first state of all behaviours that satisfy  *)
+(* `Spec'                                                                  *)
 (***************************************************************************)
 
 Init ==
   /\ inbox = [n \in Node |-> <<>>]
   /\ state = [n \in Node |-> InitState]
 
+(***************************************************************************)
+(* `Next' must be true for all steps in all behaviours that satisfy `Spec'.*)
+(* It is the disjunction of the client and server actions defined above.   *)
+(***************************************************************************)
+
 Next ==
   \/ \E self \in Client, song \in Song : SendAdd(self, song)
-  \/ \E self \in Client : RecvSync(self)
   \/ \E self \in Client : SendSeek(self)
   \/ \E self \in Client : SendSkip(self)
+  \/ \E self \in Client : RecvSync(self)
   \/ RecvAdd
   \/ RecvSeek
   \/ RecvSkip
   \/ LoseMsg
 
+(***************************************************************************)
+(* Last but not least... Spec itself.                                      *)
+(*                                                                         *)
+(* You can read this as:                                                   *)
+(*                                                                         *)
+(* For every behaviour that satisfies `Spec', `Init' is true for the first *)
+(* state and for every pair of states (a "step") either `Next' is true or  *)
+(* or nothing changes (a "stuttering" step).                               *)  
+(***************************************************************************)
+
 Spec ==
   Init /\ [][Next]_vars
 
 -----------------------------------------------------------------------------
+
+(***************************************************************************)
+(* If `Spec' is true for a behaviour then TypeOK is true for every state   *)
+(* in that behaviour. THEOREM is (basically) a hint to the reader that we  *)
+(* can use TLC to check this invariant.                                    *)
+(***************************************************************************)
 
 THEOREM Spec => []TypeOK
 
