@@ -102,7 +102,7 @@ SendAdd(self, song) ==
 SendSeek(self) ==
   LET
     playhead == state[self].playhead
-    newPlayhead == [playhead EXCEPT !.t = playhead.t + 1]
+    newPlayhead == [playhead EXCEPT !.t = @ + 1]
     msg == [action |-> "seek", data |-> newPlayhead, sender |-> self]
   IN
     /\ playhead /= Stopped
