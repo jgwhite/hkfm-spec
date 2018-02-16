@@ -41,7 +41,7 @@ Playhead == [i : Idx, t : Nat]
 Stopped  == [i |-> -1, t |-> 0]
 
 (***************************************************************************)
-(* A playlist is a sequence of songs from the constant set Song.          *)
+(* A playlist is a sequence of songs from the constant set Song.           *)
 (* More formally, Playlist is the set of all sequences of songs.           *)
 (***************************************************************************)
 
